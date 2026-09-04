@@ -53,7 +53,7 @@ test('routeLLMProviders returns deterministic text fallback order with availabil
   assert.deepEqual(attempts.map(attempt => attempt.provider), attempts.map(attempt => attempt.provider));
 });
 
-test('routeLLMProviders omits DeepSeek from multimodal fallback (text-only provider)', async () => {
+test('routeLLMProviders omits a text-only DeepSeek model from multimodal fallback', async () => {
   const attempts = await route({
     capability: 'chat',
     multimodal: true,
@@ -66,10 +66,25 @@ test('routeLLMProviders omits DeepSeek from multimodal fallback (text-only provi
       hasClaude: true,
       hasDeepseek: true,
     },
+    models: { deepseek: 'deepseek-v4-flash' },
   });
 
   assert.equal(attempts.find(a => a.provider === 'deepseek'), undefined,
-    'DeepSeek must not appear in the multimodal/vision fallback chain');
+    'a text-only DeepSeek model must not appear in the multimodal/vision fallback chain');
+});
+
+test('routeLLMProviders includes DeepSeek Vision-Exp in multimodal fallback', async () => {
+  const attempts = await route({
+    capability: 'chat',
+    multimodal: true,
+    availability: { hasDeepseek: true },
+    models: { deepseek: 'deepseek-v4-flash-vision-exp' },
+  });
+
+  const deepseek = attempts.find(a => a.provider === 'deepseek');
+  assert.ok(deepseek, 'DeepSeek Vision-Exp must appear in the multimodal fallback chain');
+  assert.equal(deepseek.status, 'available');
+  assert.equal(deepseek.model, 'deepseek-v4-flash-vision-exp');
 });
 
 test('routeLLMProviders marks DeepSeek missing_api_key when key absent', async () => {

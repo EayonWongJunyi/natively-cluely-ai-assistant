@@ -1,3 +1,5 @@
+import { deepseekSupportsImages } from './deepseekModels';
+
 export type LLMProviderId = 'natively' | 'groq' | 'codex' | 'gemini_flash' | 'gemini_pro' | 'openai' | 'claude' | 'deepseek' | 'ollama';
 export type ProviderCapability = 'chat' | 'stream_chat' | 'structured' | 'vision';
 export type ProviderAttemptStatus = 'available' | 'unavailable';
@@ -294,15 +296,16 @@ export function routeLLMProviders(options: ProviderRouteOptions): ProviderAttemp
         unavailableReason: 'missing_api_key',
         supports: ['chat', 'stream_chat', 'structured', 'vision'],
     };
-    // DeepSeek (OpenAI-compatible) is intentionally text-only — no vision support
-    // declared, so it is excluded from multimodal/screenshot fallback chains.
+    const deepseekHasVision = deepseekSupportsImages(models.deepseek || '');
     const deepseek: ProviderSpec = {
         provider: 'deepseek',
         name: `DeepSeek (${models.deepseek ?? 'default'})`,
         model: models.deepseek,
         available: Boolean(availability.hasDeepseek),
         unavailableReason: 'missing_api_key',
-        supports: ['chat', 'stream_chat', 'structured'],
+        supports: deepseekHasVision
+            ? ['chat', 'stream_chat', 'structured', 'vision']
+            : ['chat', 'stream_chat', 'structured'],
     };
     const ollama: ProviderSpec = {
         provider: 'ollama',
@@ -313,11 +316,10 @@ export function routeLLMProviders(options: ProviderRouteOptions): ProviderAttemp
         supports: ['chat', 'stream_chat', 'structured', 'vision'],
     };
 
-    // DeepSeek is placed after Claude in the text-only chain (between the existing
-    // cloud chat providers and the local Ollama fallback) and is omitted from the
-    // multimodal chain since no DeepSeek vision model is supported.
+    // A DeepSeek key contributes to the multimodal chain only when the routed
+    // model is the documented vision model. Text-only DeepSeek picks stay out.
     const orderedSpecs: ProviderSpec[] = options.multimodal
-        ? [natively, codex, openai, geminiFlash, claude, geminiPro, groq]
+        ? [natively, codex, openai, ...(deepseekHasVision ? [deepseek] : []), geminiFlash, claude, geminiPro, groq]
         : [natively, groq, codex, geminiFlash, geminiPro, openai, claude, deepseek];
 
     if (availability.hasOllama) {

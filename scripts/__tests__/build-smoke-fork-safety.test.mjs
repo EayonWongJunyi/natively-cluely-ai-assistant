@@ -33,11 +33,16 @@ test('trusted runs cannot silently downgrade when the premium credential is miss
   assert.match(workflow, /Run intelligence unit tests\s+if: \$\{\{ !cancelled\(\) && steps\.smoke_scope\.outputs\.mode == 'full' \}\}/);
 });
 
-test('core smoke externalizes private runtime imports only behind an explicit opt-in', () => {
+test('private runtime imports are externalized only behind explicit core or local-dev opt-ins', () => {
   assert.equal(packageJson.scripts['build:electron'], 'node scripts/build-electron.js');
   assert.match(packageJson.scripts['build:electron:core-smoke'], /NATIVELY_CORE_SMOKE=1/);
+  assert.match(packageJson.scripts['build:electron:dev'], /NATIVELY_ALLOW_MISSING_PREMIUM=1/);
+  assert.match(packageJson.scripts['electron:dev'], /npm run build:electron:dev/);
   assert.match(buildScript, /const CORE_SMOKE = process\.env\.NATIVELY_CORE_SMOKE === '1'/);
-  assert.match(buildScript, /plugins: CORE_SMOKE \? \[coreSmokePremiumExternalPlugin\] : \[\]/);
+  assert.match(buildScript, /const ALLOW_MISSING_PREMIUM = process\.env\.NATIVELY_ALLOW_MISSING_PREMIUM === '1'/);
+  assert.match(buildScript, /const SOURCE_AVAILABLE = ALLOW_MISSING_PREMIUM && !fs\.existsSync\(premiumDir\)/);
+  assert.match(buildScript, /const EXTERNALIZE_PREMIUM = CORE_SMOKE \|\| SOURCE_AVAILABLE/);
+  assert.match(buildScript, /plugins: EXTERNALIZE_PREMIUM \? \[coreSmokePremiumExternalPlugin\] : \[\]/);
   assert.match(buildScript, /filter: \/\^\(\?:\\\.\\\.\\\/\)\+premium/);
 });
 

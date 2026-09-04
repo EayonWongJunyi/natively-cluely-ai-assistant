@@ -878,6 +878,7 @@ export class CredentialsManager {
         if (this.credentials.claudeApiKey) return true;          // Claude vision
         if (this.credentials.geminiApiKey) return true;          // Gemini vision
         if (this.credentials.groqApiKey) return true;            // Groq qwen3.6-27b vision
+        if (this.credentials.deepseekApiKey) return true;        // DeepSeek V4 Flash Vision
         // Custom providers: only count if they have screenshots scope AND multimodal flag
         const custom = this.credentials.customProviders || [];
         if (custom.some(p => (p as any)?.multimodal === true)) return true;

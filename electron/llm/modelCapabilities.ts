@@ -3,6 +3,7 @@
 // Cloud + large local models -> 'full' prompts. Small local models -> 'tiny' prompts.
 
 import type { TranscriptTurn } from './transcriptCleaner';
+import { deepseekSupportsImages } from './deepseekModels';
 
 export type ModelTier = 'cloud' | 'local-large' | 'local-small';
 export type PromptTier = 'full' | 'tiny';
@@ -139,6 +140,7 @@ export function getModelCapabilities(modelId: string, isOllama: boolean): ModelC
     const b = TIER_BUDGETS['cloud'];
     const supportsImages = lower.startsWith('gemini-') || lower.startsWith('claude-')
       || lower.startsWith('gpt-4o') || lower.startsWith('gpt-4.1') || lower.startsWith('gpt-5')
+      || deepseekSupportsImages(lower)
       || lower === 'natively' || lower.startsWith('natively-');
     return {
       tier: 'cloud',

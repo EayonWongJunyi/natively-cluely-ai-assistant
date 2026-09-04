@@ -29,6 +29,7 @@ import sharp from 'sharp';
 export type OptimizationProfile = 'fast' | 'balanced' | 'technical' | 'best';
 export type ProviderHint =
   | 'openai'
+  | 'deepseek'
   | 'claude'
   | 'gemini'
   | 'groq'
@@ -87,6 +88,7 @@ function applyProviderTweaks(
       return base;
     case 'gemini':
     case 'openai':
+    case 'deepseek':
     case 'claude':
     case 'groq':
     case 'codex':

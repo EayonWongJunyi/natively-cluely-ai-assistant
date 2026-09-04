@@ -22,6 +22,13 @@ import { fileURLToPath } from 'node:url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '../..');
 const scriptPath = path.join(repoRoot, 'scripts/build-native.js');
+const scriptSource = fs.readFileSync(scriptPath, 'utf8');
+
+test('macOS Homebrew rustup is discoverable without shell profile edits', () => {
+  assert.match(scriptSource, /'\/opt\/homebrew\/opt\/rustup\/bin'/);
+  assert.match(scriptSource, /'\/usr\/local\/opt\/rustup\/bin'/);
+  assert.match(scriptSource, /\.find\(\(dir\) => fs\.existsSync\(path\.join\(dir, 'cargo'\)\)\)/);
+});
 
 const ARTIFACT = 'index.win32-x64-msvc.node';
 const LAST_GOOD = 'LAST-GOOD-BINARY';

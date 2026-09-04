@@ -58,4 +58,14 @@ describe('buildVisionProviders Gemini cascade order', () => {
     assert.match(registrySrc, /id:\s*'gemini_flash_lite'/);
     assert.match(registrySrc, /modelId:\s*'gemini-3\.1-flash-lite'/);
   });
+
+  test('DeepSeek Vision-Exp is registered in the cloud vision chain', () => {
+    const openai = idx('openai');
+    const deepseek = idx('deepseek');
+    const flashLite = idx('geminiFlashLite');
+    assert.ok(deepseek >= 0, 'DeepSeek is not registered in buildVisionProviders');
+    assert.ok(openai < deepseek && deepseek < flashLite, 'DeepSeek should follow OpenAI and precede Gemini');
+    assert.match(registrySrc, /modelId:\s*DEEPSEEK_VISION_MODEL/);
+    assert.match(registrySrc, /invoke:\s*async \(p\) => callLLMHelperVision\('deepseek', p\)/);
+  });
 });

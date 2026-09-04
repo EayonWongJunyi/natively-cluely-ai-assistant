@@ -670,6 +670,11 @@ DEFAULT_MODEL=gemini-3.1-flash-lite-preview
 npm start
 ```
 
+If the private `premium` submodule is not available, development startup
+automatically uses the source-available core build. Premium-only features are
+disabled, while the public provider, chat, screenshot, and meeting paths remain
+available. Release builds remain strict and still require the private submodule.
+
 ### Build (Production)
 
 ```bash

@@ -17,11 +17,19 @@ const WATCH = process.argv.includes('--watch');
 // entrypoint, but leaves private runtime imports unresolved for the packaged
 // premium build to supply. Normal development and release builds are unchanged.
 const CORE_SMOKE = process.env.NATIVELY_CORE_SMOKE === '1';
+// Local source-available development is also an explicit opt-in, but unlike the
+// CI smoke mode it only activates when premium/electron is actually absent.
+// This lets `npm start` work for public contributors while preserving a full
+// premium build for maintainers who have the private submodule checked out.
+const ALLOW_MISSING_PREMIUM = process.env.NATIVELY_ALLOW_MISSING_PREMIUM === '1';
 const path = require('path');
 const fs = require('fs');
 
 const rootDir = path.resolve(__dirname, '..');
 const outDir = path.resolve(rootDir, 'dist-electron');
+const premiumDir = path.resolve(rootDir, 'premium/electron');
+const SOURCE_AVAILABLE = ALLOW_MISSING_PREMIUM && !fs.existsSync(premiumDir);
+const EXTERNALIZE_PREMIUM = CORE_SMOKE || SOURCE_AVAILABLE;
 
 const entryPoints = [];
 
@@ -42,7 +50,6 @@ if (fs.existsSync(electronDir)) {
 }
 
 // Also include premium electron files if they exist
-const premiumDir = path.resolve(rootDir, 'premium/electron');
 if (fs.existsSync(premiumDir)) {
   entryPoints.push(...findTs(premiumDir).map(f => path.relative(rootDir, f)));
 }
@@ -115,7 +122,7 @@ const buildOptions = {
     '.ts': 'ts',
     '.js': 'js',
   },
-  plugins: CORE_SMOKE ? [coreSmokePremiumExternalPlugin] : [],
+  plugins: EXTERNALIZE_PREMIUM ? [coreSmokePremiumExternalPlugin] : [],
   // EVAL-ONLY DNS fix, injected at the very top of every output bundle (runs
   // BEFORE esbuild's deferred __esm module initializers — a top-level statement
   // inside main.ts gets wrapped in a lazy init that never ran at process start).
@@ -167,6 +174,8 @@ if (WATCH) {
 } else {
   if (CORE_SMOKE) {
     console.log('[build-electron] Core smoke mode: private premium imports are external');
+  } else if (SOURCE_AVAILABLE) {
+    console.log('[build-electron] Source-available mode: premium submodule not found; premium features are disabled');
   }
   build(buildOptions).then(() => {
     copyAssets();

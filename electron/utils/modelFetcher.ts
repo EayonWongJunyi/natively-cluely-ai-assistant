@@ -4,6 +4,11 @@
  */
 
 import axios from 'axios';
+import {
+    DEEPSEEK_DEFAULT_MODEL_IDS,
+    deepseekSupportsImages,
+    isDeepseekModelId,
+} from '../llm/deepseekModels';
 
 export interface ProviderModel {
     id: string;
@@ -244,13 +249,28 @@ export function pickLatestSnapshotPerModel<T extends { id?: string; created_at?:
 
 // ─── DeepSeek ────────────────────────────────────────────────────────────────
 
-// Documented current DeepSeek text models; used as fallback if /models call fails
-// or returns an unexpected shape. deepseek-chat / deepseek-reasoner are deprecated
-// (2026-07-24) and intentionally excluded.
-const DEEPSEEK_DEFAULT_MODELS: ProviderModel[] = [
-    { id: 'deepseek-v4-flash', label: 'deepseek-v4-flash' },
-    { id: 'deepseek-v4-pro', label: 'deepseek-v4-pro' },
-];
+// Documented current DeepSeek chat models; used as fallback if /models fails or
+// returns an unexpected shape. Includes the official multimodal experiment so
+// a transient catalog failure cannot make the vision model disappear from UI.
+const DEEPSEEK_DEFAULT_MODELS: ProviderModel[] = DEEPSEEK_DEFAULT_MODEL_IDS.map(id => ({ id, label: id }));
+
+/** Keep chat-capable DeepSeek models, including the explicitly-supported vision model. */
+export function filterDeepSeekModels(models: any[]): any[] {
+    const excludePatterns = [
+        'embedding', 'embed', 'image', 'audio',
+        'tts', 'speech', 'whisper', 'stt',
+    ];
+
+    return models.filter((m: any) => {
+        const id = (m?.id || '').toLowerCase();
+        if (!isDeepseekModelId(id)) return false;
+        // This model contains "vision" in its id but is a Chat Completions
+        // model. Match it before excluding non-chat image/vision endpoints.
+        if (deepseekSupportsImages(id)) return true;
+        if (id.includes('vision')) return false;
+        return !excludePatterns.some(p => id.includes(p));
+    });
+}
 
 async function fetchDeepSeekModels(apiKey: string): Promise<ProviderModel[]> {
     try {
@@ -264,17 +284,7 @@ async function fetchDeepSeekModels(apiKey: string): Promise<ProviderModel[]> {
             return DEEPSEEK_DEFAULT_MODELS;
         }
 
-        const excludePatterns = [
-            'embedding', 'embed', 'vision', 'image', 'audio',
-            'tts', 'speech', 'whisper', 'stt',
-        ];
-
-        const filtered = models.filter((m: any) => {
-            const id = (m.id || '').toLowerCase();
-            if (!/^deepseek-v\d/.test(id)) return false;
-            if (excludePatterns.some(p => id.includes(p))) return false;
-            return true;
-        });
+        const filtered = filterDeepSeekModels(models);
 
         if (filtered.length === 0) return DEEPSEEK_DEFAULT_MODELS;
 

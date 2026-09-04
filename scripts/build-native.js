@@ -9,9 +9,15 @@ const nativeModulePath = path.join(__dirname, '..', 'native-module');
 const RESCUE_MARKER = '.rescue-last-good';
 const buildAllMacTargets = process.env.NATIVELY_BUILD_ALL_MAC_ARCHES === '1';
 
-// Ensure Cargo binary directory (~/.cargo/bin) is in PATH if cargo is installed there
-const cargoBinDir = path.join(os.homedir(), '.cargo', 'bin');
-if (fs.existsSync(cargoBinDir)) {
+// Ensure a rustup-managed Cargo proxy directory is in PATH. The standard
+// installer uses ~/.cargo/bin; Homebrew's keg-only rustup formula keeps the
+// proxies under its opt prefix and intentionally does not link cargo/rustc.
+const cargoBinDir = [
+  path.join(os.homedir(), '.cargo', 'bin'),
+  '/opt/homebrew/opt/rustup/bin',
+  '/usr/local/opt/rustup/bin',
+].find((dir) => fs.existsSync(path.join(dir, 'cargo')));
+if (cargoBinDir) {
   const pathDelimiter = os.platform() === 'win32' ? ';' : ':';
   const currentPath = process.env.PATH || '';
   if (!currentPath.split(pathDelimiter).includes(cargoBinDir)) {

@@ -69,6 +69,12 @@ import axios from 'axios';
 import { createProviderRateLimiters, RateLimiter } from './services/RateLimiter';
 import { CodexCliConfig, CodexCliService, DEFAULT_CODEX_CLI_CONFIG } from './services/CodexCliService';
 import { GROQ_PRIMARY_MODEL, groqFallbackFor, isGroqModelGone } from './llm/groqModels';
+import {
+  DEEPSEEK_DEFAULT_MODEL,
+  DEEPSEEK_VISION_MODEL,
+  deepseekSupportsImages,
+  isDeepseekModelId,
+} from './llm/deepseekModels';
 import { DirectAssistError } from './direct-assist/errors';
 import { DIRECT_ASSIST_CURRENT_TURN_SPEECH_MARKER } from './direct-assist/requestBuilder';
 import type {
@@ -144,7 +150,7 @@ import { GROQ_VISION_MODEL } from './llm/groqModels'
 const GROQ_VISION_MAX_IMAGES = 5
 const OPENAI_MODEL = "gpt-5.4"
 const CLAUDE_MODEL = "claude-sonnet-4-6"
-const DEEPSEEK_MODEL = "deepseek-v4-flash"
+const DEEPSEEK_MODEL = DEEPSEEK_DEFAULT_MODEL
 const DEEPSEEK_BASE_URL = "https://api.deepseek.com"
 const NVIDIA_NIM_BASE_URL = "https://integrate.api.nvidia.com/v1"
 // Requested ceiling; see createNvidiaNimCompletion for why it is a request and
@@ -1244,7 +1250,7 @@ export class LLMHelper {
   // these named entry points so the surface stays auditable.
 
   public async runVisionRequest(
-    providerId: 'natively' | 'openai' | 'claude' | 'gemini_flash_lite' | 'gemini_flash' | 'gemini_pro' | 'groq_scout' | 'custom',
+    providerId: 'natively' | 'openai' | 'deepseek' | 'claude' | 'gemini_flash_lite' | 'gemini_flash' | 'gemini_pro' | 'groq_scout' | 'custom',
     userPrompt: string,
     systemPrompt: string,
     imagePath: string,
@@ -1254,6 +1260,8 @@ export class LLMHelper {
         return this.generateWithNatively(userPrompt, systemPrompt, [imagePath]);
       case 'openai':
         return this.generateWithOpenai(userPrompt, systemPrompt, [imagePath]);
+      case 'deepseek':
+        return this.generateWithDeepseek(userPrompt, systemPrompt, DEEPSEEK_VISION_MODEL, [imagePath]);
       case 'claude':
         return this.generateWithClaude(userPrompt, systemPrompt, [imagePath]);
       case 'groq_scout':
@@ -1365,8 +1373,7 @@ export class LLMHelper {
   }
 
   private isDeepseekModel(modelId: string): boolean {
-    if (!modelId) return false;
-    return /^deepseek-v\d/.test(modelId.toLowerCase());
+    return isDeepseekModelId(modelId);
   }
 
   private isLiteLLMModel(modelId: string): boolean {
@@ -3268,10 +3275,15 @@ let isMultimodal = !!(imagePaths?.length);
         return await this.generateWithClaude(cloudUserContent, claudeSystemPrompt, cloudImagePaths);
       }
       if (this.isDeepseekModel(this.currentModelId) && this.deepseekClient) {
-        // DeepSeek is text-only; ignore image attachments here and let the
-        // fallback below pick a vision-capable provider if imagePaths are needed.
-        if (!cloudIsMultimodal) {
-          return await this.generateWithDeepseek(cloudUserContent, openaiSystemPrompt);
+        // Only the official Vision-Exp model accepts image content. A text-only
+        // DeepSeek selection falls through to the cross-provider vision chain.
+        if (!cloudIsMultimodal || deepseekSupportsImages(this.currentModelId)) {
+          return await this.generateWithDeepseek(
+            cloudUserContent,
+            openaiSystemPrompt,
+            this.currentModelId,
+            cloudIsMultimodal ? cloudImagePaths : undefined,
+          );
         }
       }
       if (this.isLiteLLMModel(this.currentModelId) && this.litellmClient) {
@@ -3329,7 +3341,9 @@ let isMultimodal = !!(imagePaths?.length);
           geminiPro: textGeminiPro,
           openai: textOpenAI,
           claude: textClaude,
-          deepseek: this.isDeepseekModel(this.currentModelId) ? this.currentModelId : DEEPSEEK_MODEL,
+          deepseek: cloudIsMultimodal
+            ? DEEPSEEK_VISION_MODEL
+            : this.isDeepseekModel(this.currentModelId) ? this.currentModelId : DEEPSEEK_MODEL,
           ollama: this.ollamaModel,
         },
         dataScopes: outboundScopes,
@@ -3371,11 +3385,15 @@ let isMultimodal = !!(imagePaths?.length);
             providers.push({ name: routedProvider.name, execute: () => this.generateWithClaude(cloudUserContent, claudeSystemPrompt, cloudIsMultimodal ? cloudImagePaths : undefined, routedProvider.model || textClaude) });
             break;
           case 'deepseek':
-            // DeepSeek is text-only; the router already excludes it from multimodal,
-            // but this guard makes the omission explicit and safe to refactor.
-            if (!cloudIsMultimodal) {
-              providers.push({ name: routedProvider.name, execute: () => this.generateWithDeepseek(cloudUserContent, openaiSystemPrompt, routedProvider.model || DEEPSEEK_MODEL) });
-            }
+            providers.push({
+              name: routedProvider.name,
+              execute: () => this.generateWithDeepseek(
+                cloudUserContent,
+                openaiSystemPrompt,
+                routedProvider.model || (cloudIsMultimodal ? DEEPSEEK_VISION_MODEL : DEEPSEEK_MODEL),
+                cloudIsMultimodal ? cloudImagePaths : undefined,
+              ),
+            });
             break;
           case 'ollama':
             providers.push({ name: routedProvider.name, execute: () => this.callOllama(combinedMessages.gemini, imagePaths, undefined) });
@@ -3384,9 +3402,6 @@ let isMultimodal = !!(imagePaths?.length);
       }
 
       if (providers.length === 0) {
-        if (cloudIsMultimodal && this.deepseekClient) {
-          return "DeepSeek is configured for text-only requests. Add a vision-capable provider like Gemini, OpenAI, Claude, Groq, or Natively to analyze images.";
-        }
         return this.noProviderAvailableMessage();
       }
 
@@ -4029,29 +4044,44 @@ let isMultimodal = !!(imagePaths?.length);
 
   /**
    * Non-streaming DeepSeek generation via the OpenAI-compatible API.
-   * Text-only — image payloads are intentionally not sent. Image-bearing
-   * requests are routed away from DeepSeek by the fallback chain.
+   * Image payloads are accepted only by the documented Vision-Exp model.
    */
-  private async generateWithDeepseek(userMessage: string, systemPrompt?: string, modelId?: string): Promise<string> {
+  private async generateWithDeepseek(userMessage: string, systemPrompt?: string, modelId?: string, imagePaths?: string[]): Promise<string> {
     if (this.isLocalOnlyMode) throw new Error("Cloud providers disabled in local-only mode");
     if (!this.deepseekClient) throw new Error("DeepSeek client not initialized");
-    // No imagePaths argument — DeepSeek is text-only here; let the scope guard see text payload only.
-    this.assertOutboundScopes('deepseek', userMessage);
+
+    const model = modelId || (this.isDeepseekModel(this.currentModelId) ? this.currentModelId : DEEPSEEK_MODEL);
+    if (imagePaths?.length && !deepseekSupportsImages(model)) {
+      throw new Error(`DeepSeek model ${model} does not support image input`);
+    }
+    this.assertOutboundScopes('deepseek', userMessage, imagePaths);
 
     await this.rateLimiters.deepseek.acquire();
 
-    const model = modelId || (this.isDeepseekModel(this.currentModelId) ? this.currentModelId : DEEPSEEK_MODEL);
-
     const messages: any[] = [];
     if (systemPrompt) messages.push({ role: "system", content: systemPrompt });
-    messages.push({ role: "user", content: userMessage });
+    if (imagePaths?.length) {
+      const content: any[] = [{ type: 'text', text: userMessage }];
+      for (const p of imagePaths) {
+        if (!fs.existsSync(p)) continue;
+        const { mimeType, data } = await this.processImage(p);
+        content.push({ type: 'image_url', image_url: { url: `data:${mimeType};base64,${data}` } });
+      }
+      messages.push({ role: 'user', content });
+    } else {
+      messages.push({ role: 'user', content: userMessage });
+    }
 
+    const request = {
+      model,
+      messages,
+      max_tokens: this.getDeepseekMaxOutput(model),
+    };
+    require('./llm/providerPayloadCapture').captureProviderPayload({
+      provider: 'deepseek', classification: 'sdk_request_object_before_serialization', payload: request,
+    });
     const response = await this.withTimeout(
-      this.withRetry(() => this.deepseekClient!.chat.completions.create({
-        model,
-        messages,
-        max_tokens: this.getDeepseekMaxOutput(model),
-      })),
+      this.withRetry(() => this.deepseekClient!.chat.completions.create(request)),
       60000,
       `DeepSeek (${model})`
     );
@@ -5090,7 +5120,7 @@ let isMultimodal = !!(imagePaths?.length);
     const textGroq = this.modelVersionManager.getTextTieredModels(TextModelFamily.GROQ).tier1;
 
     if (isMultimodal) {
-      // MULTIMODAL PROVIDER ORDER: [Natively] -> Codex CLI -> OpenAI -> Gemini Flash-Lite -> Gemini Flash -> Claude -> Gemini Pro -> Groq Scout 4
+      // MULTIMODAL PROVIDER ORDER: [Natively] -> Codex CLI -> OpenAI -> DeepSeek -> Gemini Flash-Lite -> Gemini Flash -> Claude -> Gemini Pro -> Groq
       if (this.hasNatively()) {
         providers.push({ name: 'Natively API', execute: () => this.streamWithNatively(userContent, openaiSystemPrompt, imagePaths, abortSignal) });
       }
@@ -5099,6 +5129,12 @@ let isMultimodal = !!(imagePaths?.length);
       }
       if (this.openaiClient) {
         providers.push({ name: `OpenAI (${textOpenAI})`, execute: () => this.streamWithOpenaiMultimodal(userContent, imagePaths!, openaiSystemPrompt, textOpenAI, abortSignal) });
+      }
+      if (this.deepseekClient && !this.deepseekPermanentlyDead) {
+        providers.push({
+          name: `DeepSeek (${DEEPSEEK_VISION_MODEL})`,
+          execute: () => this.streamWithDeepseek(userContent, openaiSystemPrompt, DEEPSEEK_VISION_MODEL, abortSignal, imagePaths),
+        });
       }
       if (this.client) {
         // Gemini cascade leads with flash-lite (cheapest/fastest), then flash.
@@ -5134,7 +5170,7 @@ let isMultimodal = !!(imagePaths?.length);
       if (this.claudeClient) {
         providers.push({ name: `Claude (${textClaude})`, execute: () => this.streamWithClaude(userContent, claudeSystemPrompt, textClaude, abortSignal) });
       }
-      // DeepSeek text-only fallback — mirrors the router order in routeLLMProviders.
+      // DeepSeek text fallback — mirrors the router order in routeLLMProviders.
       // Skip silently after a permanent key/billing failure (402) so the chain stops
       // re-attempting the dead endpoint every rotation (would otherwise waste a few
       // seconds × N rotations before yielding the "All AI services are currently
@@ -5169,10 +5205,6 @@ let isMultimodal = !!(imagePaths?.length);
     }
 
     if (providers.length === 0) {
-      if (isMultimodal && imagePaths && this.deepseekClient) {
-        yield "DeepSeek is configured for text-only requests. Add a vision-capable provider like Gemini, OpenAI, Claude, Groq, or Natively to analyze images.";
-        return;
-      }
       yield this.noProviderAvailableMessage();
       return;
     }
@@ -5300,8 +5332,8 @@ let isMultimodal = !!(imagePaths?.length);
   //      straight through. A failure AFTER commit cannot switch providers (that
   //      would duplicate output) — we end the stream gracefully.
   //
-  // Priority order (user-specified): OpenAI → Claude → Gemini Flash → Gemini Pro
-  //   → Groq Scout → Natively → (local) Custom → Ollama. Healthy providers are
+  // Priority order (user-specified): OpenAI → DeepSeek → Claude → Gemini Flash
+  //   → Gemini Pro → Groq → Natively → (local) Custom → Ollama. Healthy providers are
   //   then re-ordered fastest-first by measured TTFT EWMA ("rearrange the queue
   //   in the speed"). Explicitly-selected local providers (Ollama / Custom) are
   //   honored first; local-only mode uses local providers exclusively.
@@ -5349,6 +5381,10 @@ let isMultimodal = !!(imagePaths?.length);
       if (this.openaiClient) {
         cloud.push({ id: 'openai', name: 'OpenAI', isLocal: false, priority: prio++, ttftTimeoutMs: FLASH_TTFT_MS,
           open: (sig, att) => this.streamWithOpenaiMultimodal(userContent, imagePaths, systemPrompt, tierModel(ModelFamily.OPENAI, att), sig) });
+      }
+      if (this.deepseekClient && !this.deepseekPermanentlyDead) {
+        cloud.push({ id: 'deepseek', name: `DeepSeek (${DEEPSEEK_VISION_MODEL})`, isLocal: false, priority: prio++, ttftTimeoutMs: FLASH_TTFT_MS,
+          open: (sig) => this.streamWithDeepseek(userContent, systemPrompt, DEEPSEEK_VISION_MODEL, sig, imagePaths) });
       }
       if (this.claudeClient) {
         cloud.push({ id: 'claude', name: 'Claude', isLocal: false, priority: prio++, ttftTimeoutMs: FLASH_TTFT_MS,
@@ -5430,13 +5466,14 @@ let isMultimodal = !!(imagePaths?.length);
       if (this.useOllama) { const o = local.find(p => p.id === 'ollama'); if (o) front.push(o); }
       if (this.customProvider) { const c = local.find(p => p.id === 'custom'); if (c) front.push(c); }
       if (this.isCodexCliModel(this.currentModelId)) { const cdx = cloud.find(p => p.id === 'codex-cli'); if (cdx) front.push(cdx); }
+      if (deepseekSupportsImages(this.currentModelId)) { const ds = cloud.find(p => p.id === 'deepseek'); if (ds) front.push(ds); }
       const backLocal = local.filter(p => !front.includes(p));
       const backCloud = cloud.filter(p => !front.includes(p));
       ordered = [...front, ...orderVisionByHealth(backCloud, this.visionHealth, nowMs), ...backLocal];
     }
 
     if (ordered.length === 0) {
-      throw new Error('No vision-capable provider configured. Add an API key (OpenAI, Claude, Gemini, or Groq) or enable a vision-capable Ollama model in Settings.');
+      throw new Error('No vision-capable provider configured. Add an API key (OpenAI, DeepSeek, Claude, Gemini, or Groq) or enable a vision-capable Ollama model in Settings.');
     }
 
     // Delegate the first-token-commit + retry + circuit-breaker state machine.
@@ -6961,7 +6998,7 @@ let isMultimodal = !!(imagePaths?.length);
 
     // ── UNIFIED MULTIMODAL PATH ────────────────────────────────────────────
     // Every image-bearing request goes through the single streaming vision
-    // fallback chain (OpenAI → Claude → Gemini → Groq → Natively → local) with
+    // fallback chain (OpenAI → DeepSeek → Claude → Gemini → Groq → Natively → local) with
     // first-token commit, per-provider retries, circuit breaking, and speed
     // reordering. This replaces the old per-model multimodal branches below,
     // which would dead-end when the selected model (e.g. `natively`) failed and
@@ -6981,7 +7018,7 @@ let isMultimodal = !!(imagePaths?.length);
         // chain commits to a provider it yields tokens and won't throw here.
         console.error('[LLMHelper] Vision fallback chain exhausted:', visionErr?.message || visionErr);
         if (!visionYielded && !abortSignal?.aborted) {
-          yield "I couldn't read the screen just now — all vision models are unavailable. Check your API keys (OpenAI, Claude, Gemini, or Groq) in Settings, or try again in a moment.";
+          yield "I couldn't read the screen just now — all vision models are unavailable. Check your API keys (OpenAI, DeepSeek, Claude, Gemini, or Groq) in Settings, or try again in a moment.";
         }
       }
       return;
@@ -7127,8 +7164,8 @@ let isMultimodal = !!(imagePaths?.length);
       return;
     }
 
-    // DeepSeek (text-only). When images are present, fall through so the
-    // vision-first chain (Gemini/Claude/OpenAI/Natively) handles them instead.
+    // DeepSeek text requests. Image-bearing requests have already returned
+    // through the unified vision chain above, which uses Vision-Exp.
     if (this.isDeepseekModel(this.currentModelId) && this.deepseekClient && !(isMultimodal && imagePaths)) {
       const deepseekSystem = systemPromptOverride || OPENAI_SYSTEM_PROMPT;
       const finalDeepseekSystem = this.injectLanguageInstruction(deepseekSystem);
@@ -8055,32 +8092,50 @@ let isMultimodal = !!(imagePaths?.length);
   }
 
   /**
-   * Stream response from DeepSeek (OpenAI-compatible). Text-only by design.
+   * Stream response from DeepSeek (OpenAI-compatible), with optional image
+   * content for the official Vision-Exp model.
    */
-  private async * streamWithDeepseek(userMessage: string, systemPrompt?: string, modelId?: string, abortSignal?: AbortSignal): AsyncGenerator<string, void, unknown> {
+  private async * streamWithDeepseek(userMessage: string, systemPrompt?: string, modelId?: string, abortSignal?: AbortSignal, imagePaths?: string[]): AsyncGenerator<string, void, unknown> {
     if (this.isLocalOnlyMode) throw new Error("Cloud providers disabled in local-only mode");
     if (!this.deepseekClient) throw new Error("DeepSeek client not initialized");
-    this.assertOutboundScopes('deepseek', userMessage);
+
+    const model = modelId || (this.isDeepseekModel(this.currentModelId) ? this.currentModelId : DEEPSEEK_MODEL);
+    if (imagePaths?.length && !deepseekSupportsImages(model)) {
+      throw new Error(`DeepSeek model ${model} does not support image input`);
+    }
+    this.assertOutboundScopes('deepseek', userMessage, imagePaths);
 
     await this.rateLimiters.deepseek.acquire();
 
-    const model = modelId || (this.isDeepseekModel(this.currentModelId) ? this.currentModelId : DEEPSEEK_MODEL);
-
     const messages: any[] = [];
     if (systemPrompt) messages.push({ role: "system", content: systemPrompt });
-    messages.push({ role: "user", content: userMessage });
+    if (imagePaths?.length) {
+      const content: any[] = [{ type: 'text', text: userMessage }];
+      for (const p of imagePaths) {
+        if (!fs.existsSync(p)) continue;
+        const { mimeType, data } = await this.processImage(p);
+        content.push({ type: 'image_url', image_url: { url: `data:${mimeType};base64,${data}` } });
+      }
+      messages.push({ role: 'user', content });
+    } else {
+      messages.push({ role: 'user', content: userMessage });
+    }
 
     if (abortSignal?.aborted) return;
     let stream;
     try {
-      stream = await this.deepseekClient.chat.completions.create({
+      const request = {
         model,
         messages,
-        stream: true,
+        stream: true as const,
         temperature: INTERACTIVE_TEMPERATURE,
         seed: INTERACTIVE_SEED, // DeepSeek is OpenAI-compatible and honors seed
         max_tokens: this.getDeepseekMaxOutput(model),
-      }, { signal: abortSignal });
+      };
+      require('./llm/providerPayloadCapture').captureProviderPayload({
+        provider: 'deepseek', classification: 'sdk_request_object_before_serialization', payload: request,
+      });
+      stream = await this.deepseekClient.chat.completions.create(request, { signal: abortSignal });
     } catch (err: any) {
       // Hard-trip on billing/quota/auth failures so we don't burn 3 chain rotations
       // re-attempting a 402 every few seconds. Mirrors Gemini's markRateCooled for
@@ -9408,7 +9463,7 @@ let isMultimodal = !!(imagePaths?.length);
         // fallback or a text-only retry.
         return true;
       case 'deepseek':
-        return false;
+        return deepseekSupportsImages(selection.model);
       default:
         return getModelCapabilities(selection.model, false).supportsImages;
     }
@@ -9560,7 +9615,7 @@ let isMultimodal = !!(imagePaths?.length);
         }
         return;
       case 'deepseek':
-        yield* this.streamWithDeepseek(directUserPrompt, request.systemPrompt, model, abortSignal);
+        yield* this.streamWithDeepseek(directUserPrompt, request.systemPrompt, model, abortSignal, imagePaths);
         return;
       case 'nvidia_nim':
         yield* this.streamWithNvidiaNim(directUserPrompt, request.systemPrompt, imagePaths, abortSignal, model);

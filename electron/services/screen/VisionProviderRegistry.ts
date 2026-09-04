@@ -20,6 +20,7 @@ import type {
 } from './VisionProviderFallbackChain';
 import { CredentialsManager } from '../CredentialsManager';
 import { GROQ_PRIMARY_MODEL } from '../../llm/groqModels';
+import { DEEPSEEK_VISION_MODEL } from '../../llm/deepseekModels';
 
 export interface VisionProviderBuildInputs {
   mode: VisionMode;
@@ -29,7 +30,7 @@ export interface VisionProviderBuildInputs {
 
 /**
  * Produce the ordered list of vision providers for the given mode. Order is:
- *   vision_first / vision_only: Natively → OpenAI → Gemini Flash-Lite →
+ *   vision_first / vision_only: Natively → OpenAI → DeepSeek → Gemini Flash-Lite →
  *                                Gemini Flash → Claude → Gemini Pro → Groq Scout
  *                                → Ollama → Codex → Custom
  *   private_vision: Ollama → Codex → local Custom only
@@ -43,6 +44,7 @@ export function buildVisionProviders(inputs: VisionProviderBuildInputs): VisionP
   if (cloudAllowed) {
     providers.push(natively(credentials, inputs));
     providers.push(openai(credentials, inputs));
+    providers.push(deepseek(credentials, inputs));
     // Gemini cascade leads with flash-lite (cheapest/fastest), then flash.
     providers.push(geminiFlashLite(credentials, inputs));
     providers.push(geminiFlash(credentials, inputs));
@@ -88,6 +90,21 @@ function openai(creds: CredentialsManager, _inputs: VisionProviderBuildInputs): 
     scopeAllowsScreenshots: true,
     hint: 'openai',
     invoke: async (p) => callLLMHelperVision('openai', p),
+  };
+}
+
+function deepseek(creds: CredentialsManager, _inputs: VisionProviderBuildInputs): VisionProviderConfig {
+  const apiKey = creds.getDeepseekApiKey();
+  return {
+    id: 'deepseek',
+    displayName: 'DeepSeek',
+    modelId: DEEPSEEK_VISION_MODEL,
+    isLocal: false,
+    isConfigured: !!apiKey,
+    supportsVision: !!apiKey,
+    scopeAllowsScreenshots: true,
+    hint: 'deepseek',
+    invoke: async (p) => callLLMHelperVision('deepseek', p),
   };
 }
 
