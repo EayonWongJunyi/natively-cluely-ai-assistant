@@ -13,6 +13,7 @@ import path from 'path';
 import { finished } from 'stream/promises';
 
 import { NEMOTRON_REQUIRED_FILES } from '../modelManager';
+import { buildHuggingFaceResolveUrl } from '../huggingFaceEndpoint';
 
 export const NEMOTRON_REPO = 'onnx-community/nemotron-3.5-asr-streaming-0.6b-onnx-int4';
 // Single source of truth for the file list lives in modelManager.ts (Task 2) —
@@ -63,7 +64,7 @@ export async function downloadNemotronFiles(
       report(Math.min(99, Math.round((downloadedSoFar / TOTAL_APPROX_BYTES) * 100)));
       continue;
     }
-    const url = `https://huggingface.co/${NEMOTRON_REPO}/resolve/main/${file}`;
+    const url = buildHuggingFaceResolveUrl(NEMOTRON_REPO, file);
     const response = await fetch(url);
     if (!response.ok || !response.body) {
       throw new Error(`Failed to download ${file}: HTTP ${response.status}`);

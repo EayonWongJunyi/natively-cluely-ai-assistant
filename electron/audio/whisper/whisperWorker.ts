@@ -17,6 +17,7 @@
 import { parentPort } from 'worker_threads';
 import { WhisperProgressAggregator } from './whisperProgressAggregator';
 import { getBoundedOnnxSessionOptions } from '../../utils/onnxThreadConfig';
+import { configureTransformersEndpoint } from './huggingFaceEndpoint';
 // Shared language-capability module (also consumed by ipcHandlers for the
 // Settings UI). Replaces two hand-maintained tables that had both drifted:
 //  - LANG_MAP was keyed by BCP-47 tags ('en-US') while the host actually
@@ -272,6 +273,7 @@ parentPort.on('message', async (msg: any) => {
 
       env.cacheDir = msg.cacheDir;
       env.allowRemoteModels = true;
+      const remoteHost = configureTransformersEndpoint(env);
 
       // Apply hardware-specific execution providers (CoreML, DirectML, CUDA, CPU)
       const providers: string[] = msg.executionProviders ?? ['cpu'];
@@ -287,7 +289,7 @@ parentPort.on('message', async (msg: any) => {
         : 'mixed:' + Object.entries(dtype).sort(([a], [b]) => a.localeCompare(b)).map(([k, v]) => `${k}=${v}`).join(',');
       const sessionOptions = getBoundedOnnxSessionOptions();
 
-      console.log(`[WhisperWorker] Loading ${msg.modelId} | providers=${providers.join(',')} | dtype=${dtypeDesc}`);
+      console.log(`[WhisperWorker] Loading ${msg.modelId} | host=${remoteHost} | providers=${providers.join(',')} | dtype=${dtypeDesc}`);
 
       // DIAGNOSTICS (2026-06-13): the model files load fine in isolation (raw ORT +
       // transformers, both in system node), yet the live worker can fail with

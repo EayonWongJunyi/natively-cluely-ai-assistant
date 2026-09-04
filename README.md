@@ -449,7 +449,7 @@ We've launched the official **$NAT token** on Printr! Holders who maintain a spe
 
 #### 🖥 Platform
 
-- Electron 43 and TypeScript 7; requires Node 22.6+ to build from source.
+- Electron 43 and TypeScript 7; requires Node 22.12+ to build from source.
 - Signed macOS builds for **both** Apple Silicon and Intel, plus a macOS 12 (Monterey) compatibility guard for local speech.
 
 > 📄 **[Read the full v2.8.7 release notes →](docs/releases/v2.8.7.md)**
@@ -548,7 +548,7 @@ You explicitly control:
 
 ### Prerequisites
 
-- Node.js (v22.6+ required)
+- Node.js (v22.12+ required)
 - Git
 - Rust (required for native audio capture)
 
@@ -629,6 +629,14 @@ cd natively-cluely-ai-assistant
 npm install
 ```
 
+If Hugging Face model downloads fail with `ECONNRESET`, retry with a trusted
+mirror. For example, in PowerShell:
+
+```powershell
+$env:HF_ENDPOINT = "https://hf-mirror.com"
+npm install
+```
+
 ### Build Native Audio Module (Rust)
 
 ```bash
@@ -637,31 +645,35 @@ npm run build:native
 
 ### Environment Variables
 
-Create a `.env` file:
+This step is optional because provider credentials can also be saved in the
+app's Settings screen. If you use a `.env` file, uncomment only values that you
+have actually configured; placeholder values are treated as real credentials.
 
 ```env
 # Cloud AI
-GEMINI_API_KEY=your_key
-GROQ_API_KEY=your_key
-OPENAI_API_KEY=your_key
-CLAUDE_API_KEY=your_key
-GOOGLE_APPLICATION_CREDENTIALS=/absolute/path/to/service-account.json
+# GEMINI_API_KEY=your_key
+# GROQ_API_KEY=your_key
+# OPENAI_API_KEY=your_key
+# CLAUDE_API_KEY=your_key
+
+# Set this only when the JSON file exists at the absolute path.
+# GOOGLE_APPLICATION_CREDENTIALS=/absolute/path/to/service-account.json
 
 # Speech Providers (Optional - only one needed)
-DEEPGRAM_API_KEY=your_key
-ELEVENLABS_API_KEY=your_key
-AZURE_SPEECH_KEY=your_key
-AZURE_SPEECH_REGION=eastus
-IBM_WATSON_API_KEY=your_key
-IBM_WATSON_REGION=us-south
+# DEEPGRAM_API_KEY=your_key
+# ELEVENLABS_API_KEY=your_key
+# AZURE_SPEECH_KEY=your_key
+# AZURE_SPEECH_REGION=eastus
+# IBM_WATSON_API_KEY=your_key
+# IBM_WATSON_REGION=us-south
 
 # Local AI (Ollama)
-USE_OLLAMA=true
-OLLAMA_MODEL=llama3.2
-OLLAMA_URL=http://localhost:11434
+# USE_OLLAMA=true
+# OLLAMA_MODEL=llama3.2
+# OLLAMA_URL=http://localhost:11434
 
 # Default Model Configuration
-DEFAULT_MODEL=gemini-3.1-flash-lite-preview
+# DEFAULT_MODEL=gemini-3.1-flash-lite-preview
 ```
 
 ### Run (Development)

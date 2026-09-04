@@ -29,6 +29,27 @@ const OPTIONAL_MODEL_FILES = [
     'pipecat-ai/smart-turn-v3/smart-turn-v3.1-cpu.onnx',
 ];
 
+const DOWNLOAD_ATTEMPTS = 3;
+
+async function withRetries(label, operation, attempts = DOWNLOAD_ATTEMPTS) {
+    let lastError;
+    for (let attempt = 1; attempt <= attempts; attempt += 1) {
+        try {
+            return await operation();
+        } catch (error) {
+            lastError = error;
+            if (attempt === attempts) break;
+            const delayMs = 1000 * (2 ** (attempt - 1));
+            console.warn(
+                `[download-models] ${label} failed (attempt ${attempt}/${attempts}): ${error?.message ?? error}. ` +
+                `Retrying in ${delayMs / 1000}s...`
+            );
+            await new Promise((resolve) => setTimeout(resolve, delayMs));
+        }
+    }
+    throw lastError;
+}
+
 /** Plain HTTPS download with redirects, to a temp path, then sha256-verified rename. */
 function downloadVerified(url, dest, expectedSha256, expectedBytes) {
     return new Promise((resolve, reject) => {
@@ -73,7 +94,14 @@ async function downloadSmartTurn(modelsDir) {
         return;
     }
     console.log(`[download-models] Downloading ${manifest.model}/${manifest.file} (${(manifest.bytes / 1e6).toFixed(1)} MB, ${manifest.license})...`);
-    await downloadVerified(manifest.url, dest, manifest.sha256, manifest.bytes);
+    let url = manifest.url;
+    if (process.env.HF_ENDPOINT) {
+        const source = new URL(manifest.url);
+        url = new URL(source.pathname.replace(/^\//, ''), process.env.HF_ENDPOINT.replace(/\/+$/, '') + '/').toString();
+    }
+    await withRetries('pipecat-ai/smart-turn-v3', () =>
+        downloadVerified(url, dest, manifest.sha256, manifest.bytes)
+    );
     console.log('[download-models] smart-turn-v3.1 downloaded and sha256-verified.');
 }
 
@@ -111,6 +139,10 @@ async function downloadModels() {
 
     // Let Transformers.js handle the download but specify the local directory cache
     env.cacheDir = modelsDir;
+    if (process.env.HF_ENDPOINT) {
+        env.remoteHost = process.env.HF_ENDPOINT.replace(/\/+$/, '') + '/';
+        console.log(`[download-models] Using Hugging Face endpoint: ${env.remoteHost}`);
+    }
     
     try {
         // dtype MUST be explicit on transformers.js v3 (we ship 3.8.1). v2 defaulted to
@@ -125,12 +157,16 @@ async function downloadModels() {
 
         // 1. Embedding model (RAG)
         console.log('[download-models] Downloading Xenova/all-MiniLM-L6-v2 (q8)...');
-        await pipeline('feature-extraction', 'Xenova/all-MiniLM-L6-v2', QUANTIZED);
+        await withRetries('Xenova/all-MiniLM-L6-v2', () =>
+            pipeline('feature-extraction', 'Xenova/all-MiniLM-L6-v2', QUANTIZED)
+        );
         console.log('[download-models] all-MiniLM-L6-v2 downloaded.');
 
         // 2. Zero-shot classification model (Intent Classifier)
         console.log('[download-models] Downloading Xenova/mobilebert-uncased-mnli (q8)...');
-        await pipeline('zero-shot-classification', 'Xenova/mobilebert-uncased-mnli', QUANTIZED);
+        await withRetries('Xenova/mobilebert-uncased-mnli', () =>
+            pipeline('zero-shot-classification', 'Xenova/mobilebert-uncased-mnli', QUANTIZED)
+        );
         console.log('[download-models] mobilebert-uncased-mnli downloaded.');
 
         // 3. Cross-encoder reranker (smart-retrieval Phase 1/3 — confidence-gated
@@ -146,7 +182,9 @@ async function downloadModels() {
         // (~280 MB) instead of the fp32 one (~1.1 GB). NATIVELY_RERANKER_DTYPE
         // override remains for accuracy experiments.
         const rerankerDtype = (process.env.NATIVELY_RERANKER_DTYPE || 'q8').trim() || 'q8';
-        await pipeline('text-classification', 'Xenova/bge-reranker-base', { dtype: rerankerDtype });
+        await withRetries('Xenova/bge-reranker-base', () =>
+            pipeline('text-classification', 'Xenova/bge-reranker-base', { dtype: rerankerDtype })
+        );
         console.log('[download-models] bge-reranker-base downloaded.');
 
         // 4. Smart Turn v3.1 (Auto Answer V3 TurnPredictor). Raw ONNX, not a
@@ -178,4 +216,3 @@ if (process.argv.includes('--verify')) {
         process.exit(1);
     });
 }
-
